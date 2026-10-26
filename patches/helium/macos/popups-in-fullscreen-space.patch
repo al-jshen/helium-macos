@@ -1,0 +1,49 @@
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+@@ -670,6 +670,26 @@ void BrowserNativeWidgetMac::OnWidgetIni
+           base::BindRepeating(&BrowserNativeWidgetMac::UpdateBackgroundColor,
+                               base::Unretained(this)));
+   UpdateBackground();
++
++  // Open popup windows in the current fullscreen space instead of switching to
++  // a separate desktop. Extension popouts (chrome.windows.create with type
++  // "popup") are TYPE_APP_POPUP rather than TYPE_POPUP.
++  const BrowserWindowInterface::Type type = browser_view_->browser()->GetType();
++  if (type == BrowserWindowInterface::Type::TYPE_POPUP ||
++      type == BrowserWindowInterface::Type::TYPE_APP_POPUP) {
++    GetWidget()->SetCanAppearInExistingFullscreenSpaces(true);
++    can_appear_in_existing_fullscreen_spaces_ = true;
++  }
++}
++
++void BrowserNativeWidgetMac::OnWidgetVisibilityChanged(views::Widget* widget,
++                                                       bool visible) {
++  // Once the popup has been placed in a space, restore the default behavior so
++  // that the popup itself can still enter fullscreen.
++  if (visible && can_appear_in_existing_fullscreen_spaces_) {
++    can_appear_in_existing_fullscreen_spaces_ = false;
++    GetWidget()->SetCanAppearInExistingFullscreenSpaces(false);
++  }
+ }
+ 
+ void BrowserNativeWidgetMac::OnWidgetThemeChanged(views::Widget* widget) {
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.h
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.h
+@@ -87,6 +87,7 @@ class BrowserNativeWidgetMac : public vi
+   remote_cocoa::ApplicationHost* GetRemoteCocoaApplicationHost() override;
+   void OnWindowInitialized() override;
+   void OnWidgetInitDone() override;
++  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
+   void OnWidgetThemeChanged(views::Widget* widget) override;
+   void OnWindowDestroying(gfx::NativeWindow window) override;
+   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
+@@ -108,6 +109,9 @@ class BrowserNativeWidgetMac : public vi
+   std::optional<SkColor> last_theme_color_;
+   std::optional<bool> last_is_glass_eligible_;
+   base::CallbackListSubscription paint_as_active_subscription_;
++  // True until a popup window is first shown, so that it opens in the current
++  // fullscreen space.
++  bool can_appear_in_existing_fullscreen_spaces_ = false;
+ 
+   base::WeakPtrFactory<BrowserNativeWidgetMac> weak_ptr_factory_{this};
+ };
