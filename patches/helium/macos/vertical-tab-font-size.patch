@@ -1,0 +1,295 @@
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -659,6 +659,11 @@ inline constexpr char kHeliumMinimalLoca
+ inline constexpr char kHeliumShowProgressBar[] =
+     "helium.browser.show_progress_bar";
+ 
++// An integer pref with the font size offset (in pixels) applied to the titles
++// of vertical tabs. 0 uses the default font size.
++inline constexpr char kHeliumVerticalTabFontSizeDelta[] =
++    "helium.browser.vertical_tab_font_size_delta";
++
+ // A boolean pref set to true if a Home button to open the Home pages should be
+ // visible on the toolbar.
+ inline constexpr char kShowHomeButton[] = "browser.show_home_button";
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -143,6 +143,8 @@ void RegisterBrowserUserPrefs(user_prefs
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumShowProgressBar, true);
+ 
++  registry->RegisterIntegerPref(prefs::kHeliumVerticalTabFontSizeDelta, 0);
++
+   registry->RegisterBooleanPref(prefs::kHomePageIsNewTabPage, true,
+                                 pref_registration_flags);
+   registry->RegisterBooleanPref(prefs::kShowHomeButton, false,
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -228,6 +228,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumShowProgressBar] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumVerticalTabFontSizeDelta] =
++      settings_api::PrefType::kNumber;
+   (*s_allowlist)[::prefs::kHeliumZenMode] = settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumZenModeSidebarPinned] =
+       settings_api::PrefType::kBoolean;
+--- a/chrome/app/settings_strings.grdp
++++ b/chrome/app/settings_strings.grdp
+@@ -307,6 +307,12 @@
+     <message name="IDS_SETTINGS_TAB_STRIP_RIGHT_ALIGN" desc="Label for the toggle that displays vertical tabs on the right side of the browser window.">
+       Show vertical tabs on right side
+     </message>
++    <message name="IDS_SETTINGS_VERTICAL_TAB_FONT_SIZE" desc="Label for the dropdown that changes the font size of vertical tab titles.">
++      Vertical tab font size
++    </message>
++    <message name="IDS_SETTINGS_VERTICAL_TAB_FONT_SIZE_DEFAULT" desc="Option in the vertical tab font size dropdown that uses the default font size.">
++      Default
++    </message>
+     <message name="IDS_SETTINGS_CENTERED_LOCATION_BAR" desc="Label for the toggle to use a centered address bar.">
+       Centered address bar
+     </message>
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -617,6 +617,9 @@ void AddAppearanceStrings(content::WebUI
+       {"browserLayoutCompact", IDS_SETTINGS_BROWSER_LAYOUT_COMPACT},
+       {"browserLayoutVertical", IDS_SETTINGS_BROWSER_LAYOUT_VERTICAL},
+       {"tabStripRightAlign", IDS_SETTINGS_TAB_STRIP_RIGHT_ALIGN},
++      {"verticalTabFontSize", IDS_SETTINGS_VERTICAL_TAB_FONT_SIZE},
++      {"verticalTabFontSizeDefault",
++       IDS_SETTINGS_VERTICAL_TAB_FONT_SIZE_DEFAULT},
+       {"browserZenMode", IDS_SETTINGS_BROWSER_ZEN_MODE},
+       {"browserZenModeDescription", IDS_SETTINGS_BROWSER_ZEN_MODE_DESCRIPTION},
+       {"zenModePinSidebar", IDS_SETTINGS_ZEN_PIN_SIDEBAR},
+--- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
++++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
+@@ -3,6 +3,7 @@
+ // the terms of the GPL-3.0 license that can be found in the LICENSE file.
+ 
+ import '../controls/controlled_radio_button.js';
++import '../controls/settings_dropdown_menu.js';
+ import '../controls/settings_radio_group.js';
+ import '../controls/settings_toggle_button.js';
+ import '../settings_page/settings_section.js';
+@@ -10,6 +11,7 @@ import '../settings_page/settings_sectio
+ import {PrefServiceObserverMixinLit} from '/shared/settings/prefs2/pref_service_observer_mixin_lit.js';
+ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+ 
++import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
+ import {loadTimeData} from '../i18n_setup.js';
+ 
+ import {getCss} from './appearance_layout_page.css.js';
+@@ -53,6 +55,7 @@ export class SettingsAppearanceLayoutPag
+     return {
+       browserLayoutPref_: {type: Object},
+       browserLayoutOptions_: {type: Array},
++      verticalTabFontSizeOptions_: {type: Array},
+       showVerticalTabsExpandOnHoverEnabled_: {type: Boolean},
+       zenModePref_: {type: Object},
+       zenModeSidebarPinnedPref_: {type: Object},
+@@ -94,6 +97,15 @@ export class SettingsAppearanceLayoutPag
+     },
+   ];
+ 
++  // Font size offsets in pixels, applied to the default vertical tab font.
++  protected accessor verticalTabFontSizeOptions_: DropdownMenuOptionList =
++      [-2, -1, 0, 1, 2, 3, 4, 6, 8].map(delta => ({
++        value: delta,
++        name: delta === 0 ?
++            loadTimeData.getString('verticalTabFontSizeDefault') :
++            `${delta > 0 ? '+' : '\u2212'}${Math.abs(delta)}`,
++      }));
++
+   protected accessor showVerticalTabsExpandOnHoverEnabled_: boolean =
+       loadTimeData.getBoolean('showVerticalTabsExpandOnHoverEnabled');
+ 
+--- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
++++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
+@@ -32,6 +32,16 @@ export function getHtml(this: SettingsAp
+       pref-key="helium.browser.vertical_right_aligned"
+       label="$i18n{tabStripRightAlign}">
+   </settings-toggle-button>
++  <div class="cr-row hr" ?hidden="${!this.showVerticalSettings_()}">
++    <div class="flex cr-padded-text" aria-hidden="true">
++      $i18n{verticalTabFontSize}
++    </div>
++    <settings-dropdown-menu id="verticalTabFontSize"
++        label="$i18n{verticalTabFontSize}"
++        pref-key="helium.browser.vertical_tab_font_size_delta"
++        .menuOptions="${this.verticalTabFontSizeOptions_}">
++    </settings-dropdown-menu>
++  </div>
+   <settings-toggle-button class="hr" disabled
+       ?hidden="${!this.showVerticalTabsExpandOnHoverSetting_() ||
+                  !this.isExpandOnHoverForcedByZenMode_()}"
+--- a/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/tab_view.h"
+ 
++#include <algorithm>
+ #include <optional>
+ #include <string>
+ 
+@@ -16,6 +17,7 @@
+ #include "chrome/browser/glic/browser_ui/tab_underline_controller.h"
+ #include "chrome/browser/glic/browser_ui/tab_underline_view.h"
+ #include "chrome/browser/glic/public/glic_enabling.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/themes/theme_properties.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -57,6 +59,7 @@
+ #include "chrome/browser/ui/views/tabs/tab_style_views.h"
+ #include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
+ #include "chrome/common/buildflags.h"
++#include "chrome/common/pref_names.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "chrome/grit/theme_resources.h"
+ #include "components/contextual_tasks/public/features.h"
+@@ -93,12 +96,15 @@
+ #include "ui/views/layout/delegating_layout_manager.h"
+ #include "ui/views/layout/layout_types.h"
+ #include "ui/views/layout/proposed_layout.h"
++#include "ui/views/style/typography_provider.h"
+ #include "ui/views/view.h"
+ #include "ui/views/view_class_properties.h"
+ #include "ui/views/view_utils.h"
+ 
+ namespace {
+ constexpr int kFocusRingInset = 0.0f;
++constexpr int kMinVerticalTabFontSizeDelta = -4;
++constexpr int kMaxVerticalTabFontSizeDelta = 12;
+ 
+ class TabHighlightPathGenerator : public views::HighlightPathGenerator {
+  public:
+@@ -414,6 +420,15 @@ TabView::TabView(TabCollectionNode* coll
+     collapsed_state_changed_subscription_ =
+         state_controller->RegisterOnCollapseChanged(base::BindRepeating(
+             &TabView::OnCollapseStateChanged, base::Unretained(this)));
++
++    if (browser_window) {
++      vertical_tab_font_size_delta_.Init(
++          prefs::kHeliumVerticalTabFontSizeDelta,
++          browser_window->GetProfile()->GetPrefs(),
++          base::BindRepeating(&TabView::UpdateTitleFont,
++                              base::Unretained(this)));
++      UpdateTitleFont();
++    }
+   }
+   close_button_observation_.Observe(close_button_);
+ }
+@@ -1218,6 +1233,17 @@ void TabView::UpdateTitle(std::u16string
+   title_->SetText(title);
+ }
+ 
++void TabView::UpdateTitleFont() {
++  const int font_size_delta =
++      std::clamp(vertical_tab_font_size_delta_.GetValue(),
++                 kMinVerticalTabFontSizeDelta, kMaxVerticalTabFontSizeDelta);
++  title_->SetFontList(
++      views::TypographyProvider::Get()
++          .GetFont(title_->GetTextContext(), title_->GetTextStyle())
++          .DeriveWithSizeDelta(font_size_delta));
++  InvalidateLayout();
++}
++
+ void TabView::UpdateBorder() {
+   if (orientation_ == TabStripOrientation::kHorizontal) {
+     SetBorder(views::CreateEmptyBorder(tab_styling()->GetContentsInsets()));
+--- a/chrome/browser/ui/views/tabs/common/tab_view.h
++++ b/chrome/browser/ui/views/tabs/common/tab_view.h
+@@ -21,6 +21,7 @@
+ #include "chrome/browser/ui/views/tabs/tab/tab_context_menu_controller.h"
+ #include "chrome/common/buildflags.h"
+ #include "components/performance_manager/public/freezing/freezing.h"
++#include "components/prefs/pref_member.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "third_party/skia/include/core/SkScalar.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+@@ -182,6 +183,7 @@ class TabView : public views::View,
+   void UpdateTabData(const tabs::TabData& tab);
+ 
+   void UpdateTitle(std::u16string title, bool should_render_loading_title);
++  void UpdateTitleFont();
+   void UpdateBorder();
+   void UpdateColors();
+   void UpdateContrastRatioValues();
+@@ -262,6 +264,8 @@ class TabView : public views::View,
+ 
+   std::unique_ptr<tabs::TabDataObserver> tab_data_observer_;
+ 
++  IntegerPrefMember vertical_tab_font_size_delta_;
++
+   base::ScopedObservation<views::View, views::ViewObserver>
+       close_button_observation_{this};
+ 
+--- a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.h"
+ 
++#include <algorithm>
++
+ #include "base/command_line.h"
+ #include "chrome/browser/glic/browser_ui/tab_underline_view.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -15,12 +17,23 @@
+ #include "chrome/browser/ui/views/tabs/tab/tab_icon.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_title.h"
+ #include "chrome/browser/ui/views/tabs/tab_style_views.h"
++#include "ui/views/style/typography_provider.h"
+ 
+ namespace {
+ constexpr int kIconDesignWidth = 16;
+ constexpr int kTitleMinWidth = 10;
+ constexpr int kHorizontalInset = 7;
+ constexpr int kDefaultPadding = 4;
++
++// Returns the extra height needed to fit a title font that is larger than the
++// default one.
++int GetTitleExtraHeight(const TabTitle* title) {
++  const gfx::FontList& default_font_list =
++      views::TypographyProvider::Get().GetFont(title->GetTextContext(),
++                                               title->GetTextStyle());
++  return std::max(
++      0, title->font_list().GetHeight() - default_font_list.GetHeight());
++}
+ }  // namespace
+ 
+ TabViewVerticalLayout::TabViewVerticalLayout() = default;
+@@ -49,9 +62,11 @@ views::ProposedLayout TabViewVerticalLay
+     const views::SizeBounds& size_bounds) const {
+   const int width = size_bounds.width().value_or(
+       VerticalTabStripRegionView::kUncollapsedMaxWidth);
+-  const int height = GetLayoutConstant(
+-      TabView().pinned_ ? LayoutConstant::kVerticalTabPinnedHeight
+-                        : LayoutConstant::kVerticalTabHeight);
++  const int height =
++      TabView().pinned_
++          ? GetLayoutConstant(LayoutConstant::kVerticalTabPinnedHeight)
++          : GetLayoutConstant(LayoutConstant::kVerticalTabHeight) +
++                GetTitleExtraHeight(TabView().title_);
+   views::ProposedLayout layouts;
+   layouts.host_size = gfx::Size(width, height);
+ 
+--- a/chrome/browser/ui/views/tabs/common/BUILD.gn
++++ b/chrome/browser/ui/views/tabs/common/BUILD.gn
+@@ -95,6 +95,7 @@ source_set("impl") {
+     "//chrome/browser/glic",
+     "//chrome/browser/glic/browser_ui:glow",
+     "//chrome/browser/glic/browser_ui:glow_controller",
++    "//chrome/browser/profiles:profile",
+     "//chrome/browser/tab_group_sync:factories",
+     "//chrome/browser/themes",
+     "//chrome/browser/ui:browser_command_controller",
+@@ -136,6 +137,7 @@ source_set("impl") {
+     "//chrome/browser/ui/window_metadata",
+     "//components/contextual_tasks/public:feature_list",
+     "//components/performance_manager",
++    "//components/prefs",
+     "//components/tab_groups",
+     "//components/tabs:impl",
+     "//content/public/browser",
